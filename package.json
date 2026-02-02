@@ -1,13 +1,12 @@
 {
-  "name": "@verygoodplugins/pi-automem",
+  "name": "pi-automem",
   "version": "0.1.0",
   "description": "AutoMem long-term memory integration for pi coding agent",
   "keywords": ["pi-package", "automem", "memory", "ai-memory"],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/verygoodplugins/automem.git",
-    "directory": "pi-package"
+    "url": "https://github.com/Whamp/pi-automem.git"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",

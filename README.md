@@ -7,13 +7,13 @@ Long-term memory integration for [pi coding agent](https://github.com/mariozechn
 ### From git (recommended)
 
 ```bash
-pi install git:github.com/verygoodplugins/automem/pi-package
+pi install git:github.com/Whamp/pi-automem
 ```
 
 ### From local clone
 
 ```bash
-pi install /path/to/automem/pi-package
+pi install ~/projects/pi-automem
 ```
 
 ## Configuration
