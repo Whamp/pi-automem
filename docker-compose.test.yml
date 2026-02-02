@@ -1,0 +1,60 @@
+# docker-compose.test.yml - Isolated test environment for pi-automem
+# Uses separate containers and volumes to avoid polluting production data
+
+services:
+  falkordb-test:
+    image: falkordb/falkordb:latest
+    ports:
+      - "16379:6379" # Different port to avoid conflicts
+    environment:
+      - REDIS_ARGS=--save "" --appendonly no # No persistence for tests
+      - REDIS_PASSWORD=
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: "no"
+    tmpfs:
+      - /data # In-memory storage for speed
+
+  qdrant-test:
+    image: qdrant/qdrant:v1.11.3
+    ports:
+      - "16333:6333" # Different port to avoid conflicts
+    restart: "no"
+    tmpfs:
+      - /qdrant/storage # In-memory storage for speed
+
+  automem-test:
+    build:
+      context: ${AUTOMEM_REPO_PATH:-../automem}
+      dockerfile: Dockerfile
+    ports:
+      - "18001:8001" # Different port for test API
+    environment:
+      FLASK_ENV: testing
+      FLASK_DEBUG: "0"
+      PORT: 8001
+      FALKORDB_HOST: falkordb-test
+      FALKORDB_PORT: 6379
+      FALKORDB_PASSWORD: ""
+      QDRANT_URL: http://qdrant-test:6333
+      QDRANT_API_KEY: ""
+      AUTOMEM_API_TOKEN: test-token-pi-automem
+      ADMIN_API_TOKEN: test-admin-token-pi-automem
+      OPENAI_API_KEY: "" # Not needed when using placeholder provider
+      EMBEDDING_PROVIDER: placeholder # Supported: uses hash-based deterministic vectors
+    depends_on:
+      falkordb-test:
+        condition: service_healthy
+      qdrant-test:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: "no"
+
+# No persistent volumes - tests use tmpfs for isolation

@@ -14,11 +14,12 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
 import { Type } from "@sinclair/typebox";
 
 // Configuration from environment
 const AUTOMEM_URL = process.env.AUTOMEM_URL || "http://localhost:8001";
-const AUTOMEM_TOKEN = process.env.AUTOMEM_TOKEN;
+const { AUTOMEM_TOKEN } = process.env;
 
 interface Memory {
   id: string;
@@ -57,7 +58,7 @@ interface HealthResponse {
   qdrant: string;
 }
 
-async function automemRequest(
+function automemRequest(
   path: string,
   options: RequestInit = {}
 ): Promise<Response> {
@@ -75,10 +76,10 @@ async function automemRequest(
   return fetch(url, { ...options, headers });
 }
 
-export default function (pi: ExtensionAPI) {
+export default function automemExtension(pi: ExtensionAPI) {
   // Check configuration on load
   if (!AUTOMEM_TOKEN) {
-    pi.on("session_start", async (_event, ctx) => {
+    pi.on("session_start", (_event, ctx) => {
       ctx.ui.notify(
         "AutoMem: AUTOMEM_TOKEN not set. Set it to enable memory tools.",
         "warning"
@@ -139,7 +140,9 @@ export default function (pi: ExtensionAPI) {
         if (!response.ok) {
           const error = await response.text();
           return {
-            content: [{ type: "text", text: `Failed to store memory: ${error}` }],
+            content: [
+              { type: "text", text: `Failed to store memory: ${error}` },
+            ],
             details: { error: true },
             isError: true,
           };
@@ -212,7 +215,9 @@ export default function (pi: ExtensionAPI) {
         });
 
         if (tags && tags.length > 0) {
-          tags.forEach((tag) => searchParams.append("tags", tag));
+          for (const tag of tags) {
+            searchParams.append("tags", tag);
+          }
         }
 
         if (time_query) {
@@ -224,7 +229,9 @@ export default function (pi: ExtensionAPI) {
         if (!response.ok) {
           const error = await response.text();
           return {
-            content: [{ type: "text", text: `Failed to recall memories: ${error}` }],
+            content: [
+              { type: "text", text: `Failed to recall memories: ${error}` },
+            ],
             details: { error: true },
             isError: true,
           };
@@ -247,7 +254,9 @@ export default function (pi: ExtensionAPI) {
         const formatted = data.results
           .map((r, i) => {
             const m = r.memory;
-            const tagStr = m.tags?.length ? `\n   Tags: ${m.tags.join(", ")}` : "";
+            const tagStr = m.tags?.length
+              ? `\n   Tags: ${m.tags.join(", ")}`
+              : "";
             return `${i + 1}. [${m.type}] ${m.content}${tagStr}\n   Score: ${r.score.toFixed(3)} | Importance: ${m.importance}`;
           })
           .join("\n\n");
@@ -311,9 +320,7 @@ export default function (pi: ExtensionAPI) {
         };
       } catch (error) {
         return {
-          content: [
-            { type: "text", text: `Cannot reach AutoMem: ${error}` },
-          ],
+          content: [{ type: "text", text: `Cannot reach AutoMem: ${error}` }],
           details: { error: true },
           isError: true,
         };
