@@ -10,15 +10,9 @@ Long-term memory integration for [pi coding agent](https://github.com/mariozechn
 pi install git:github.com/Whamp/pi-automem
 ```
 
-### From local clone
-
-```bash
-pi install ~/projects/pi-automem
-```
-
 ## Configuration
 
-Set these environment variables (add to `~/.bashrc` or `~/.zshrc`):
+Set these environment variables (add to `~/.bashrc`):
 
 ```bash
 export AUTOMEM_URL="http://localhost:8001"  # Your AutoMem API URL
