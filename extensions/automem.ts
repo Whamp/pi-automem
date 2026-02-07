@@ -1,25 +1,43 @@
 /**
  * AutoMem Extension - Long-term memory for pi coding agent
  *
- * Provides tools to store and recall memories from AutoMem service.
+ * Provides tools to store and recall memories from AutoMem service,
+ * plus automatic session processing to extract learnings on shutdown.
  *
  * Configuration via environment variables:
  *   AUTOMEM_URL   - AutoMem API URL (default: http://localhost:8001)
  *   AUTOMEM_TOKEN - API authentication token (required)
+ *   AUTOMEM_AUTO_EXTRACT - Enable auto-extraction on session end (default: true)
+ *   AUTOMEM_MIN_TURNS - Minimum conversation turns before extraction (default: 3)
+ *   GEMINI_API_KEY - Required for realtime extraction (get from ai.google.dev)
  *
  * Tools provided:
  *   automem_store  - Store a memory with content, type, importance, tags
  *   automem_recall - Search memories by query with optional filters
  *   automem_health - Check AutoMem service connectivity
+ *
+ * Automatic features:
+ *   - On session_shutdown: Extract decisions, insights, patterns from conversation
+ *   - Uses Gemini 2.0 Flash for fast extraction
+ *   - Stores extracted memories with source: "session-extraction"
+ *
+ * Note: For realtime extraction (on session end), set GEMINI_API_KEY.
+ * The nightly compound-review.js script uses pi itself and doesn't need this.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { Type } from "@sinclair/typebox";
 
 // Configuration from environment
 const AUTOMEM_URL = process.env.AUTOMEM_URL || "http://localhost:8001";
 const { AUTOMEM_TOKEN } = process.env;
+const AUTOMEM_AUTO_EXTRACT = process.env.AUTOMEM_AUTO_EXTRACT !== "false";
+const AUTOMEM_MIN_TURNS = parseInt(process.env.AUTOMEM_MIN_TURNS || "3", 10);
+
+// Gemini API for extraction
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash"; // Fast and cheap for extraction
 
 interface Memory {
   id: string;
@@ -58,6 +76,13 @@ interface HealthResponse {
   qdrant: string;
 }
 
+interface ExtractedMemory {
+  content: string;
+  type: "Decision" | "Insight" | "Pattern" | "Preference" | "Context";
+  importance: number;
+  tags: string[];
+}
+
 function automemRequest(
   path: string,
   options: RequestInit = {}
@@ -74,6 +99,169 @@ function automemRequest(
   };
 
   return fetch(url, { ...options, headers });
+}
+
+/**
+ * Extract conversation content from session entries for summarization.
+ * Filters to user messages and assistant text responses.
+ */
+function extractConversationText(
+  entries: Array<{ type: string; data?: unknown }>
+): { text: string; turnCount: number } {
+  const lines: string[] = [];
+  let turnCount = 0;
+
+  for (const entry of entries) {
+    if (entry.type !== "message" || !entry.data) continue;
+
+    const msg = entry.data as {
+      role?: string;
+      content?: string | Array<{ type: string; text?: string }>;
+    };
+
+    if (!msg.role || !msg.content) continue;
+
+    // Extract text content
+    let text = "";
+    if (typeof msg.content === "string") {
+      text = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      text = msg.content
+        .filter((c) => c.type === "text" && c.text)
+        .map((c) => c.text)
+        .join("\n");
+    }
+
+    if (!text.trim()) continue;
+
+    if (msg.role === "user") {
+      lines.push(`USER: ${text}`);
+      turnCount++;
+    } else if (msg.role === "assistant") {
+      // Truncate long assistant responses
+      const truncated = text.length > 2000 ? text.slice(0, 2000) + "..." : text;
+      lines.push(`ASSISTANT: ${truncated}`);
+    }
+  }
+
+  return { text: lines.join("\n\n"), turnCount };
+}
+
+/**
+ * Call Gemini 3 Flash to extract memories from conversation.
+ */
+async function callGeminiForExtraction(
+  conversationText: string
+): Promise<ExtractedMemory[]> {
+  if (!GEMINI_API_KEY) {
+    console.error("AutoMem: No GEMINI_API_KEY set for extraction");
+    return [];
+  }
+
+  const extractionPrompt = `Analyze this coding session conversation and extract important learnings that should persist across sessions.
+
+Extract ONLY items that are:
+- Decisions made (architecture, tools, approaches chosen)
+- Insights discovered (gotchas, bugs found, performance findings)
+- Patterns identified (user preferences, coding style, workflow habits)
+- Important context (project structure, constraints, requirements)
+
+Skip routine tool usage, file reads, and implementation details unless they reveal something reusable.
+
+For each memory, provide:
+- content: A clear, self-contained statement (1-2 sentences)
+- type: One of Decision, Insight, Pattern, Preference, Context
+- importance: 0.5-1.0 (1.0 = critical to remember, 0.5 = nice to have)
+- tags: Relevant tags for filtering (e.g., "typescript", "testing", "architecture")
+
+<conversation>
+${conversationText.slice(0, 30000)}
+</conversation>
+
+Respond ONLY with a valid JSON array of memories. If nothing worth remembering, respond with [].
+Example: [{"content": "User prefers dark mode", "type": "Preference", "importance": 0.6, "tags": ["ui", "preferences"]}]`;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: extractionPrompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 2048,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error("AutoMem: Gemini API error:", error);
+      return [];
+    }
+
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    // Parse JSON from response (handle markdown code blocks)
+    let jsonText = text.trim();
+    if (jsonText.startsWith("```")) {
+      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+    }
+
+    const memories = JSON.parse(jsonText) as ExtractedMemory[];
+    return Array.isArray(memories) ? memories : [];
+  } catch (error) {
+    console.error("AutoMem: Extraction failed:", error);
+    return [];
+  }
+}
+
+/**
+ * Store multiple memories to AutoMem with session metadata.
+ */
+async function storeExtractedMemories(
+  memories: ExtractedMemory[],
+  sessionId: string | undefined,
+  sessionFile: string | undefined,
+  cwd: string
+): Promise<{ stored: number; failed: number }> {
+  let stored = 0;
+  let failed = 0;
+
+  for (const memory of memories) {
+    try {
+      const response = await automemRequest("/memory", {
+        method: "POST",
+        body: JSON.stringify({
+          content: memory.content,
+          type: memory.type,
+          importance: memory.importance,
+          tags: [...memory.tags, "auto-extracted"],
+          metadata: {
+            source: "session-extraction",
+            session_id: sessionId,
+            session_file: sessionFile,
+            cwd,
+            extracted_at: new Date().toISOString(),
+          },
+        }),
+      });
+
+      if (response.ok) {
+        stored++;
+      } else {
+        failed++;
+      }
+    } catch {
+      failed++;
+    }
+  }
+
+  return { stored, failed };
 }
 
 export default function automemExtension(pi: ExtensionAPI) {
@@ -343,4 +531,60 @@ export default function automemExtension(pi: ExtensionAPI) {
       // Silent fail - user can check with automem_health tool
     }
   });
+
+  // Auto-extract memories on session shutdown
+  if (AUTOMEM_AUTO_EXTRACT) {
+    pi.on("session_shutdown", async (_event, ctx) => {
+      try {
+        const entries = ctx.sessionManager.getEntries();
+        const { text: conversationText, turnCount } =
+          extractConversationText(entries);
+
+        // Skip short sessions
+        if (turnCount < AUTOMEM_MIN_TURNS) {
+          return;
+        }
+
+        // Skip if no Gemini API key
+        if (!GEMINI_API_KEY) {
+          return;
+        }
+
+        ctx.ui.notify("AutoMem: Extracting session learnings...", "info");
+
+        const memories = await callGeminiForExtraction(conversationText);
+
+        if (memories.length === 0) {
+          return;
+        }
+
+        const sessionId = ctx.sessionManager.getSessionId();
+        const sessionFile = ctx.sessionManager.getSessionFile();
+        const cwd = ctx.sessionManager.getCwd();
+
+        const { stored, failed } = await storeExtractedMemories(
+          memories,
+          sessionId,
+          sessionFile,
+          cwd
+        );
+
+        if (stored > 0) {
+          ctx.ui.notify(
+            `AutoMem: Stored ${stored} memories from session`,
+            "success"
+          );
+        }
+        if (failed > 0) {
+          ctx.ui.notify(
+            `AutoMem: Failed to store ${failed} memories`,
+            "warning"
+          );
+        }
+      } catch (error) {
+        console.error("AutoMem session extraction failed:", error);
+        // Don't block shutdown on extraction failure
+      }
+    });
+  }
 }

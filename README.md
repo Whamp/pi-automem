@@ -1,133 +1,203 @@
-# AutoMem Pi Package
+# pi-automem
 
-Long-term memory integration for [pi coding agent](https://github.com/mariozechner/pi-coding-agent).
+Long-term memory for [pi coding agent](https://github.com/badlogic/pi-mono) using [AutoMem](https://github.com/verygoodplugins/automem).
+
+This is the pi equivalent of Ryan Carson's ["How to make your agent learn and ship while you sleep"](https://x.com/ryancarson/status/2016520542723924279) pattern, but stores learnings in AutoMem instead of AGENTS.md files.
+
+## Features
+
+### Tools for Manual Memory Management
+
+- **`automem_store`** - Store a memory with content, type, importance, and tags
+- **`automem_recall`** - Search memories by semantic similarity with optional filters
+- **`automem_health`** - Check AutoMem service connectivity
+
+### Automatic Session Extraction
+
+On every session shutdown, the extension:
+1. Extracts the conversation text
+2. Uses Gemini 3 Flash to identify decisions, insights, patterns, and context
+3. Stores them in AutoMem with `auto-extracted` tag
+
+### Nightly Compound Review
+
+A batch script processes all sessions from the last 24 hours:
+1. Finds sessions not yet processed
+2. Extracts learnings using Gemini
+3. Stores memories with `compound-review` tag
+4. Tracks processed sessions to avoid duplicates
 
 ## Installation
 
-### From git (recommended)
+### 1. Install the extension
+
+Add to your pi packages in `~/.pi/settings.json`:
+
+```json
+{
+  "packages": [
+    "git:github.com/Whamp/pi-automem"
+  ]
+}
+```
+
+Or for development, symlink directly:
 
 ```bash
-pi install git:github.com/Whamp/pi-automem
+ln -s /path/to/pi-automem ~/.pi/agent/extensions/pi-automem
 ```
+
+### 2. Configure environment
+
+Create `~/.config/automem/env`:
+
+```bash
+# Required for storing memories
+AUTOMEM_TOKEN=your-automem-api-token
+
+# Optional - AutoMem server URL (default: http://localhost:8001)
+# AUTOMEM_URL=http://desktop:8001
+
+# Optional - disable auto-extraction on session end
+# AUTOMEM_AUTO_EXTRACT=false
+
+# Optional - minimum conversation turns before extraction (default: 3)
+# AUTOMEM_MIN_TURNS=3
+```
+
+Add to your shell profile (`.bashrc`, `.zshrc`):
+
+```bash
+source ~/.config/automem/env
+```
+
+> **Note**: The compound-review script uses `pi` itself with `google-antigravity/gemini-3-flash` for extraction, so it automatically uses your existing pi authentication. No separate Gemini API key needed!
+
+### 3. Set up nightly compound review (optional)
+
+Copy the systemd units:
+
+```bash
+cp scripts/automem-compound-review.service ~/.config/systemd/user/
+cp scripts/automem-compound-review.timer ~/.config/systemd/user/
+
+# Edit paths in the service file for your system
+nano ~/.config/systemd/user/automem-compound-review.service
+
+# Enable and start
+systemctl --user daemon-reload
+systemctl --user enable --now automem-compound-review.timer
+
+# Check status
+systemctl --user status automem-compound-review.timer
+systemctl --user list-timers
+```
+
+## Usage
+
+### During sessions
+
+The extension loads automatically. At session start, you'll see a notification confirming AutoMem connection.
+
+During the session, use the tools:
+
+```
+# Store a memory manually
+"Remember that we're using PostgreSQL for this project"
+
+# Recall relevant memories
+"What database decisions have we made?"
+```
+
+### At session end
+
+When you exit pi (Ctrl+C, Ctrl+D), the extension:
+1. Checks if the session had enough turns (default: 3+)
+2. Extracts memories using Gemini 3 Flash
+3. Stores them in AutoMem
+4. Shows a notification with results
+
+### Nightly batch processing
+
+Run manually:
+
+```bash
+# Process last 24 hours
+node scripts/compound-review.js
+
+# Process last 48 hours
+node scripts/compound-review.js --hours 48
+
+# Preview without storing
+node scripts/compound-review.js --dry-run
+
+# Process specific session
+node scripts/compound-review.js --session ~/.pi/agent/sessions/.../session.jsonl
+```
+
+Or let the systemd timer run at 10:30 PM daily.
 
 ## Configuration
 
-Set these environment variables (add to `~/.bashrc`):
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUTOMEM_URL` | `http://localhost:8001` | AutoMem API endpoint |
+| `AUTOMEM_TOKEN` | (required) | API authentication token |
+| `AUTOMEM_AUTO_EXTRACT` | `true` | Enable extraction on session shutdown |
+| `AUTOMEM_MIN_TURNS` | `3` | Minimum turns before extraction |
 
-```bash
-export AUTOMEM_URL="http://localhost:8001"  # Your AutoMem API URL
-export AUTOMEM_TOKEN="your-api-token"       # Required
-```
+The compound-review script uses `pi --provider google-antigravity --model gemini-3-flash` for extraction, so no separate API key is needed.
 
-## Tools
+## How It Works
 
-The extension provides three tools:
+### The Compound Learning Loop
 
-### automem_store
+1. **During the day**: You work with pi on various tasks
+2. **At session end**: Learnings are extracted and stored immediately
+3. **Nightly at 10:30 PM**: Compound review catches any missed sessions
+4. **Next session**: AutoMem memories are available for recall
 
-Store a memory for long-term recall.
+This creates a compound effect where:
+- Patterns discovered on Monday inform Tuesday's work
+- Gotchas hit on Wednesday are avoided on Thursday
+- Decisions made last month are instantly recallable
 
-```
-"Remember that we use PostgreSQL for all new projects"
-"Store this decision: Using Tailwind CSS for the dashboard"
-```
+### Memory Types
 
-Parameters:
+| Type | Description | Example |
+|------|-------------|---------|
+| `Decision` | Architecture, tool, approach choices | "Chose PostgreSQL over MongoDB for ACID compliance" |
+| `Insight` | Gotchas, bugs, performance findings | "The /recall endpoint needs time_query for date filtering" |
+| `Pattern` | Preferences, coding style, workflows | "User prefers using ripgrep over find for code search" |
+| `Preference` | Explicit user preferences | "User wants dark mode in all applications" |
+| `Context` | Project structure, constraints | "This project uses TypeScript with strict mode" |
 
-- `content` (required): The memory content
-- `type`: Decision, Pattern, Preference, Style, Habit, Insight, or Context
-- `importance`: 0-1 score (default 0.7)
-- `tags`: Array of tags for filtering
+### Extraction Prompt
 
-### automem_recall
+Gemini 3 Flash analyzes each conversation and extracts:
+- Decisions made (architecture, tools, approaches)
+- Insights discovered (gotchas, bugs, performance)
+- Patterns identified (preferences, style, habits)
+- Important context (structure, constraints, requirements)
 
-Search and retrieve memories.
+Each memory includes:
+- Content (1-2 sentence statement)
+- Type (Decision/Insight/Pattern/Preference/Context)
+- Importance (0.5-1.0)
+- Tags (for filtering)
+- Metadata (session ID, extraction time, source)
 
-```
-"What are my database preferences?"
-"Recall decisions about the auth system"
-```
+## Comparison with Ryan Carson's Approach
 
-Parameters:
+| Aspect | Carson's Approach | pi-automem |
+|--------|-------------------|------------|
+| Tool | Claude Code / Amp | pi |
+| Memory storage | AGENTS.md files | AutoMem (FalkorDB + Qdrant) |
+| Extraction | Claude Code skills | Gemini 3 Flash |
+| Timing | Nightly only | Session-end + nightly |
+| Search | File-based | Semantic + keyword + graph |
+| Cross-project | Per-repo AGENTS.md | Centralized AutoMem |
 
-- `query` (required): Search query
-- `limit`: Max results (default 5)
-- `tags`: Filter by tags
-- `time_query`: Natural language time filter ("last week", "last month")
+## License
 
-### automem_health
-
-Check AutoMem service connectivity.
-
-## Development
-
-### Running Tests
-
-```bash
-# Install dependencies
-npm install
-
-# Run unit tests
-npm run test
-
-# Run unit tests with watch mode
-npm run test:watch
-
-# Run with coverage report
-npm run test:coverage
-```
-
-### Integration Tests
-
-Integration tests run against an isolated AutoMem instance to avoid polluting production data.
-
-```bash
-# Start test containers + run integration tests + cleanup
-npm run test:integration
-
-# Or manually:
-# 1. Start the test instance
-npm run docker:test:up
-
-# 2. Run integration tests
-npx vitest run --config vitest.integration.config.mts
-
-# 3. Stop and clean up
-npm run docker:test:down
-```
-
-The test instance runs on different ports to avoid conflicts:
-
-- AutoMem API: `localhost:18001` (vs production `8001`)
-- FalkorDB: `localhost:16379` (vs production `6379`)
-- Qdrant: `localhost:16333` (vs production `6333`)
-
-### Test Structure
-
-```
-tests/
-├── fixtures.ts                  # Mock utilities and sample data
-├── automem.test.ts             # Unit tests (mocked fetch)
-├── edge-cases.test.ts          # Edge case unit tests
-└── automem.integration.test.ts # Integration tests (real API)
-```
-
-### Test Script
-
-A convenience script is also available:
-
-```bash
-./run-tests.sh          # Unit tests only
-./run-tests.sh --all    # Unit + integration tests
-./run-tests.sh --int    # Integration tests only
-```
-
-## Requirements
-
-- AutoMem service running and accessible
-- `AUTOMEM_TOKEN` environment variable set
-
-## See Also
-
-- [AutoMem Documentation](https://github.com/verygoodplugins/automem)
-- [Pi Coding Agent](https://github.com/mariozechner/pi-coding-agent)
+MIT

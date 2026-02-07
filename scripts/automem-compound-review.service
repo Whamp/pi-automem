@@ -1,0 +1,13 @@
+[Unit]
+Description=AutoMem Compound Review - Extract learnings from pi sessions
+After=network.target automem.service
+
+[Service]
+Type=oneshot
+# Use login shell to get mise/node PATH and set token
+ExecStart=/bin/bash -lc 'export AUTOMEM_TOKEN=test-token && node ~/dotfiles/.pi/agent/scripts/compound-review.js --hours 24'
+StandardOutput=append:/home/will/.pi/agent/logs/compound-review.log
+StandardError=append:/home/will/.pi/agent/logs/compound-review.log
+
+[Install]
+WantedBy=default.target
