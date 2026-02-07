@@ -5,8 +5,17 @@
  * Scans all pi sessions from the last 24 hours, extracts learnings using
  * pi itself (with gemini-3-flash via antigravity), and stores them in AutoMem.
  *
- * This is the pi equivalent of the "Compound Review" step in Ryan Carson's
- * nightly agent loop, but stores learnings in AutoMem instead of AGENTS.md.
+ * GLOBAL SCOPE: This runs across ALL sessions from ALL projects on ALL machines.
+ * It extracts universal learnings about workflow, tools, and techniques - NOT
+ * project-specific decisions. For project-level compound learning, see docs/TODO.md.
+ *
+ * Learnings extracted:
+ *   - Workflow patterns (effective approaches, time-saving techniques)
+ *   - Tool insights (pi features, model behaviors, CLI tricks)
+ *   - Prompting patterns (what works, what doesn't)
+ *   - Model observations (strengths, weaknesses, error patterns)
+ *   - Common failure modes (gotchas that apply broadly)
+ *   - Best practices (preferences, conventions worth remembering)
  *
  * Usage:
  *   node compound-review.js                    # Process last 24 hours
@@ -159,24 +168,32 @@ async function extractMemories(conversationText) {
   // Limit conversation to ~15k chars to keep extraction fast
   const truncatedConversation = conversationText.slice(0, 15000);
   
-  const extractionPrompt = `Analyze this coding session and extract important learnings.
+  const extractionPrompt = `Analyze this coding session and extract GLOBAL learnings about workflow, tools, and techniques.
 
-Extract ONLY:
-- Decisions (architecture, tools, approaches)
-- Insights (gotchas, bugs, findings)
-- Patterns (preferences, style, habits)
-- Context (project structure, constraints)
+This runs across ALL projects on ALL machines, so extract only learnings that apply universally:
 
-Skip routine tool usage and file reads.
+EXTRACT:
+- Workflow patterns (effective approaches, time-saving techniques)
+- Tool insights (pi features, model behaviors, CLI tricks)
+- Prompting patterns (what works, what doesn't)
+- Model observations (strengths, weaknesses, error patterns)
+- Common failure modes (gotchas that apply broadly)
+- Best practices (preferences, conventions worth remembering)
 
-For each memory provide: content (1-2 sentences), type (Decision/Insight/Pattern/Preference/Context), importance (0.5-1.0), tags (array).
+SKIP:
+- Project-specific decisions (database choices, API designs)
+- File paths and codebase structure
+- Routine tool usage and file reads
+- Implementation details specific to one project
+
+For each memory provide: content (1-2 sentences, project-agnostic), type (Pattern/Insight/Preference/Habit), importance (0.5-1.0), tags (array).
 
 <conversation>
 ${truncatedConversation}
 </conversation>
 
-Respond with ONLY a JSON array. Example: [{"content": "Chose PostgreSQL", "type": "Decision", "importance": 0.8, "tags": ["db"]}]
-If nothing worth remembering, respond with []`;
+Respond with ONLY a JSON array. Example: [{"content": "Using --thinking high with gemini-3-flash improves extraction quality significantly", "type": "Insight", "importance": 0.8, "tags": ["gemini", "prompting"]}]
+If nothing universally applicable, respond with []`;
 
   // Write prompt to temp file (handles large prompts better)
   const promptFile = join(tmpdir(), `automem-extract-${Date.now()}.txt`);
